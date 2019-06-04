@@ -1,33 +1,5 @@
- const String FirmwareVersion = "018300";
+const String FirmwareVersion = "018400";
 #define HardwareVersion "NCS314 for HW 2.x"
-//Format                _X.XXX_
-//NIXIE CLOCK SHIELD NCS314 v 2.x by GRA & AFCH (fominalec@gmail.com)
-//1.83  02.08.2018 (Driver v 1.1 is required)
-//Fixed: Temp. reading speed fixed
-//Fixed: Dots mixed up (driver was updated to v. 1.1)
-//Fixed: RGB LEDs reading from EEPROM
-//Fixed: Check for entering data from GPS in range
-//1.82  18.07.2018 Dual Date Format
-//1.81  18.02.2018 Temp. sensor present analyze
-//1.80   06.08.2017
-//Added: Date and Time GPS synchronization
-//1.70   30.07.2017
-//Added  IR remote control support (Sony RM-X151) ("MODE", "UP", "DOWN")
-//1.60   24_07_2017
-//Added: Temperature reading mode in menu and slot machine transaction
-//1.0.31 27_04_2017
-//Added: antipoisoning effect - slot machine
-//1.021 31.01.2017
-//Added: time synchronizing each 10 seconds
-//Fixed: not correct time reading from RTC while start up
-//1.02 17.10.2016
-//Fixed: RGB color controls
-//Update to Arduino IDE 1.6.12 (Time.h replaced to TimeLib.h)
-//1.01
-//Added RGB LEDs lock(by UP and Down Buttons)
-//Added Down and Up buttons pause and resume self testing
-//25.09.2016 update to HW ver 1.1
-//25.05.2016
 
 //#define tubes8
 #define tubes6
@@ -41,107 +13,27 @@
 #include <EEPROM.h>
 #include "doIndication314_HW2.x.h"
 #include <OneWire.h>
-//IR remote control /////////// START /////////////////////////////
-#if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
-#include <IRremote.h>
-int RECV_PIN = 4;
-IRrecv irrecv(RECV_PIN);
-decode_results IRresults;
-// buttons codes for remote controller Sony RM-X151
-#define IR_BUTTON_UP_CODE 0x6621
-#define IR_BUTTON_DOWN_CODE 0x2621
-#define IR_BUTTON_MODE_CODE 0x7121
 
-class IRButtonState
-{
-  public:
-    int PAUSE_BETWEEN_PACKETS = 50;
-    int PACKETS_QTY_IN_LONG_PRESS = 18;
+#include "WiFiEsp.h"
+char ssid[] = "SSID";
+char pass[] = "Password";
+int status = WL_IDLE_STATUS;
+int ledStatus = HIGH;
+WiFiEspServer server(80);
+RingBuffer buf(8);
 
-  private:
-    bool Flag = 0;
-    byte CNT_packets = 0;
-    unsigned long lastPacketTime = 0;
-    bool START_TIMER = false;
-    int _buttonCode;
-
-  public: IRButtonState::IRButtonState(int buttonCode)
-    {
-      _buttonCode = buttonCode;
-    }
-
-  public: int IRButtonState::checkButtonState(int receivedCode)
-    {
-      if (((millis() - lastPacketTime) > PAUSE_BETWEEN_PACKETS) && (START_TIMER == true))
-      {
-        START_TIMER = false;
-        if (CNT_packets >= 2) {
-          Flag = 0;
-          CNT_packets = 0;
-          START_TIMER = false;
-          return 1;
-        }
-        else {
-          Flag = 0;
-          CNT_packets = 0;
-          return 0;
-        }
-      }
-      else
-      {
-        if (receivedCode == _buttonCode) { Flag = 1;}
-        else
-        {
-          if (!(Flag == 1)) {return 0;}
-          else
-          {
-            if (!(receivedCode == 0xFFFFFFFF)) {return 0;}
-          }
-        }
-        CNT_packets++;
-        lastPacketTime = millis();
-        START_TIMER = true;
-        if (CNT_packets >= PACKETS_QTY_IN_LONG_PRESS) {
-          Flag = 0;
-          CNT_packets = 0;
-          START_TIMER = false;
-          return -1;
-        }
-        else {return 0;}
-      }
-    }
-};
-
-IRButtonState IRModeButton(IR_BUTTON_MODE_CODE);
-IRButtonState IRUpButton(IR_BUTTON_UP_CODE);
-IRButtonState IRDownButton(IR_BUTTON_DOWN_CODE);
-#endif
-
+#include "WiFiEspUdp.h"
+char timeServer[] = "pool.ntp.org";  // NTP server
+unsigned int localPort = 2390;        // local port to listen for UDP packets
+const int NTP_PACKET_SIZE = 48;  // NTP timestamp is in the first 48 bytes of the message
+const int UDP_TIMEOUT = 2000;    // timeout in miliseconds to wait for an UDP packet to arrive
+byte packetBuffer[NTP_PACKET_SIZE]; // buffer to hold incoming and outgoing packets
+// A UDP instance to let us send and receive packets over UDP
+WiFiEspUDP Udp;
 
 int ModeButtonState = 0;
 int UpButtonState = 0;
 int DownButtonState = 0;
-
-//IR remote control /////////// START /////////////////////////////
-
-#define GPS_BUFFER_LENGTH 83
-
-char GPS_Package[GPS_BUFFER_LENGTH];
-byte GPS_position=0;
-
-struct GPS_DATE_TIME
-{
-  byte GPS_hours;
-  byte GPS_minutes;
-  byte GPS_seconds;
-  byte GPS_day;
-  byte GPS_mounth;
-  int GPS_year; 
-  bool GPS_Valid_Data=false;
-  unsigned long GPS_Data_Parsed_time;
-};
-
-GPS_DATE_TIME GPS_Date_Time;
 
 boolean UD, LD; // DOTS control;
 
@@ -171,7 +63,7 @@ bool TempPresent = false;
 #define FAHRENHEIT 1
 
 String stringToDisplay = "000000"; // Conten of this string will be displayed on tubes (must be 6 chars length)
-int menuPosition = 0; 
+int menuPosition = 0;
 // 0 - time
 // 1 - date
 // 2 - alarm
@@ -198,7 +90,7 @@ int RTC_hours, RTC_minutes, RTC_seconds, RTC_day, RTC_month, RTC_year, RTC_day_o
 #define TimeHoursIndex   6
 #define TimeMintuesIndex 7
 #define TimeSecondsIndex 8
-#define DateFormatIndex  9 
+#define DateFormatIndex  9
 #define DateDayIndex     10
 #define DateMonthIndex   11
 #define DateYearIndex    12
@@ -219,13 +111,13 @@ int RTC_hours, RTC_minutes, RTC_seconds, RTC_day, RTC_month, RTC_year, RTC_day_o
 //-------------------------------0--------1--------2-------3--------4--------5--------6--------7--------8--------9----------10-------11---------12---------13-------14-------15---------16---------17--------18----------19
 //                     names:  Time,   Date,   Alarm,   12/24, Temperature,TimeZone,hours,   mintues, seconds, DateFormat, day,    month,   year,      hour,   minute,   second alarm01  hour_format Deg.FormIndex HoursOffset
 //                               1        1        1       1        1        1        1        1        1        1          1        1          1          1        1        1        1            1         1        1
-int parent[SettingsCount] = {NoParent, NoParent, NoParent, NoParent,NoParent,NoParent,1,       1,       1,       2,         2,       2,         2,         3,       3,       3,       3,       4,           5,        6};
+int parent[SettingsCount] = {NoParent, NoParent, NoParent, NoParent, NoParent, NoParent, 1,       1,       1,       2,         2,       2,         2,         3,       3,       3,       3,       4,           5,        6};
 int firstChild[SettingsCount] = {6,       9,       13,     17,      18,      19,      0,       0,       0,    NoChild,      0,       0,         0,         0,       0,       0,       0,       0,           0,        0};
 int lastChild[SettingsCount] = { 8,      12,       16,     17,      18,      19,      0,       0,       0,    NoChild,      0,       0,         0,         0,       0,       0,       0,       0,           0,        0};
 int value[SettingsCount] = {     0,       0,       0,      0,       0,       0,       0,       0,       0,  EU_DateFormat,  0,       0,         0,         0,       0,       0,       0,       24,          0,        2};
 int maxValue[SettingsCount] = {  0,       0,       0,      0,       0,       0,       23,      59,      59, US_DateFormat,  31,      12,        99,       23,      59,      59,       1,       24,     FAHRENHEIT,    14};
 int minValue[SettingsCount] = {  0,       0,       0,      12,      0,       0,       00,      00,      00, EU_DateFormat,  1,       1,         00,       00,      00,      00,       0,       12,      CELSIUS,     -12};
-int blinkPattern[SettingsCount] = {  
+int blinkPattern[SettingsCount] = {
   B00000000, //0
   B00000000, //1
   B00000000, //2
@@ -277,13 +169,6 @@ ClickButton downButton(pinDown, LOW, CLICKBTN_PULLUP);
 
 Tone tone1;
 #define isdigit(n) (n >= '0' && n <= '9')
-//char *song = "MissionImp:d=16,o=6,b=95:32d,32d#,32d,32d#,32d,32d#,32d,32d#,32d,32d,32d#,32e,32f,32f#,32g,g,8p,g,8p,a#,p,c7,p,g,8p,g,8p,f,p,f#,p,g,8p,g,8p,a#,p,c7,p,g,8p,g,8p,f,p,f#,p,a#,g,2d,32p,a#,g,2c#,32p,a#,g,2c,a#5,8c,2p,32p,a#5,g5,2f#,32p,a#5,g5,2f,32p,a#5,g5,2e,d#,8d";
-char *song = "PinkPanther:d=4,o=5,b=160:8d#,8e,2p,8f#,8g,2p,8d#,8e,16p,8f#,8g,16p,8c6,8b,16p,8d#,8e,16p,8b,2a#,2p,16a,16g,16e,16d,2e";
-//char *song="VanessaMae:d=4,o=6,b=70:32c7,32b,16c7,32g,32p,32g,32p,32d#,32p,32d#,32p,32c,32p,32c,32p,32c7,32b,16c7,32g#,32p,32g#,32p,32f,32p,16f,32c,32p,32c,32p,32c7,32b,16c7,32g,32p,32g,32p,32d#,32p,32d#,32p,32c,32p,32c,32p,32g,32f,32d#,32d,32c,32d,32d#,32c,32d#,32f,16g,8p,16d7,32c7,32d7,32a#,32d7,32a,32d7,32g,32d7,32d7,32p,32d7,32p,32d7,32p,16d7,32c7,32d7,32a#,32d7,32a,32d7,32g,32d7,32d7,32p,32d7,32p,32d7,32p,32g,32f,32d#,32d,32c,32d,32d#,32c,32d#,32f,16c";
-//char *song="DasBoot:d=4,o=5,b=100:d#.4,8d4,8c4,8d4,8d#4,8g4,a#.4,8a4,8g4,8a4,8a#4,8d,2f.,p,f.4,8e4,8d4,8e4,8f4,8a4,c.,8b4,8a4,8b4,8c,8e,2g.,2p";
-//char *song="Scatman:d=4,o=5,b=200:8b,16b,32p,8b,16b,32p,8b,2d6,16p,16c#.6,16p.,8d6,16p,16c#6,8b,16p,8f#,2p.,16c#6,8p,16d.6,16p.,16c#6,16b,8p,8f#,2p,32p,2d6,16p,16c#6,8p,16d.6,16p.,16c#6,16a.,16p.,8e,2p.,16c#6,8p,16d.6,16p.,16c#6,16b,8p,8b,16b,32p,8b,16b,32p,8b,2d6,16p,16c#.6,16p.,8d6,16p,16c#6,8b,16p,8f#,2p.,16c#6,8p,16d.6,16p.,16c#6,16b,8p,8f#,2p,32p,2d6,16p,16c#6,8p,16d.6,16p.,16c#6,16a.,16p.,8e,2p.,16c#6,8p,16d.6,16p.,16c#6,16a,8p,8e,2p,32p,16f#.6,16p.,16b.,16p.";
-//char *song="Popcorn:d=4,o=5,b=160:8c6,8a#,8c6,8g,8d#,8g,c,8c6,8a#,8c6,8g,8d#,8g,c,8c6,8d6,8d#6,16c6,8d#6,16c6,8d#6,8d6,16a#,8d6,16a#,8d6,8c6,8a#,8g,8a#,c6";
-//char *song="WeWishYou:d=4,o=5,b=200:d,g,8g,8a,8g,8f#,e,e,e,a,8a,8b,8a,8g,f#,d,d,b,8b,8c6,8b,8a,g,e,d,e,a,f#,2g,d,g,8g,8a,8g,8f#,e,e,e,a,8a,8b,8a,8g,f#,d,d,b,8b,8c6,8b,8a,g,e,d,e,a,f#,1g,d,g,g,g,2f#,f#,g,f#,e,2d,a,b,8a,8a,8g,8g,d6,d,d,e,a,f#,2g";
 #define OCTAVE_OFFSET 0
 char *p;
 
@@ -316,8 +201,6 @@ bool transactionInProgress = false; //antipoisoning transaction
 long modesChangePeriod = timeModePeriod;
 //end of antipoisoning transaction
 
-bool GPS_sync_flag=false;
-
 /*******************************************************************************************************
   Init Programm
 *******************************************************************************************************/
@@ -327,9 +210,26 @@ void setup()
   //setRTCDateTime(23,40,00,25,7,15,1);
 
   Serial.begin(115200);
-  #if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
+#if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
   Serial1.begin(9600);
-  #endif
+
+
+  Serial3.begin(115200);
+  WiFi.init(&Serial3);    // initialize ESP module
+  while (status != WL_CONNECTED) {
+    Serial.print("Attempting to connect to WPA SSID: ");
+    Serial.println(ssid);
+    // Connect to WPA/WPA2 network
+    status = WiFi.begin(ssid, pass);
+  }
+
+  Serial.println("You're connected to the network");
+  printWifiStatus();
+
+  // start the web server on port 80
+  server.begin();
+  Udp.begin(localPort);
+#endif
 
   if (EEPROM.read(HourFormatEEPROMAddress) != 12) value[hModeValueIndex] = 24; else value[hModeValueIndex] = 12;
   if (EEPROM.read(RGBLEDsEEPROMAddress) != 0) RGBLedsOn = true; else RGBLedsOn = false;
@@ -341,7 +241,7 @@ void setup()
   if (EEPROM.read(DegreesFormatEEPROMAddress) == 255) value[DegreesFormatIndex] = CELSIUS; else value[DegreesFormatIndex] = EEPROM.read(DegreesFormatEEPROMAddress);
   if (EEPROM.read(HoursOffsetEEPROMAddress) == 255) value[HoursOffsetIndex] = value[HoursOffsetIndex]; else value[HoursOffsetIndex] = EEPROM.read(HoursOffsetEEPROMAddress) + minValue[HoursOffsetIndex];
   if (EEPROM.read(DateFormatEEPROMAddress) == 255) value[DateFormatIndex] = value[DateFormatIndex]; else value[DateFormatIndex] = EEPROM.read(DateFormatEEPROMAddress);
-  
+
 
   Serial.print(F("led lock="));
   Serial.println(LEDsLock);
@@ -349,9 +249,6 @@ void setup()
   pinMode(RedLedPin, OUTPUT);
   pinMode(GreenLedPin, OUTPUT);
   pinMode(BlueLedPin, OUTPUT);
-
-  tone1.begin(pinBuzzer);
-  song = parseSong(song);
 
   pinMode(LEpin, OUTPUT);
 
@@ -404,12 +301,6 @@ void setup()
     }
   }
   setTime(RTC_hours, RTC_minutes, RTC_seconds, RTC_day, RTC_month, RTC_year);
-
-#if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
-  irrecv.blink13(false);
-  irrecv.enableIRIn(); // Start the receiver
-#endif
-
 }
 
 int rotator = 0; //index in array with RGB "rules" (increse by one on each 255 cycles)
@@ -425,57 +316,67 @@ unsigned long prevTime4FireWorks = 0; //time of last RGB changed
   MAIN Programm
 ***************************************************************************************************************/
 void loop() {
+  WiFiEspClient client = server.available();  // listen for incoming clients
 
-    if (((millis() % 10000) == 0) && (RTC_present)) //synchronize with RTC every 10 seconds
+  if (client) {                               // if you get a client,
+    Serial.println("New client");             // print a message out the serial port
+    buf.init();                               // initialize the circular buffer
+    while (client.connected()) {              // loop while the client's connected
+      if (client.available()) {               // if there's bytes to read from the client,
+        char c = client.read();               // read a byte, then
+        buf.push(c);                          // push it to the ring buffer
+
+        if (buf.endsWith("\r\n\r\n")) {
+          sendHttpResponse(client);
+          break;
+        }
+
+        if (buf.endsWith("GET /H")) {
+          Serial.println("Turn led ON");
+          ledStatus = HIGH;
+          digitalWrite(LEpin, HIGH);
+        }
+        else if (buf.endsWith("GET /L")) {
+          Serial.println("Turn led OFF");
+          ledStatus = LOW;
+          digitalWrite(LEpin, LOW);
+        }
+      }
+    }
+
+    // close the connection
+    client.stop();
+    Serial.println("Client disconnected");
+  }
+
+  if (((millis() % 10000) == 0) && (RTC_present)) //synchronize with RTC every 10 seconds
   {
     getRTCTime();
     setTime(RTC_hours, RTC_minutes, RTC_seconds, RTC_day, RTC_month, RTC_year);
-    //Serial.println(F("Sync"));
   }
 
 #if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
-
-  GetDataFromSerial1();
-
-  if ((millis() % 10001) == 0) //synchronize with GPS every 10 seconds
+  if ((millis() % 10001) == 0) //synchronize with NTP every 10 seconds
   {
-    SyncWithGPS();
-    Serial.println(F("Sync from GPS"));
+    getNTPTime();
+    Serial.println(F("Sync from NTP"));
   }
-  
-  IRresults.value = 0;
-  if (irrecv.decode(&IRresults)) {
-    Serial.println(IRresults.value, HEX);
-    irrecv.resume(); // Receive the next value
-  }
-
-  ModeButtonState = IRModeButton.checkButtonState(IRresults.value);
-  if (ModeButtonState == 1) Serial.println("Mode short");
-  if (ModeButtonState == -1) Serial.println("Mode long....");
-
-  UpButtonState = IRUpButton.checkButtonState(IRresults.value);
-  if (UpButtonState == 1) Serial.println("Up short");
-  if (UpButtonState == -1) Serial.println("Up long....");
-
-  DownButtonState = IRDownButton.checkButtonState(IRresults.value);
-  if (DownButtonState == 1) Serial.println("Down short");
-  if (DownButtonState == -1) Serial.println("Down long....");
 #else
-  ModeButtonState=0;
-  UpButtonState=0;
-  DownButtonState=0;
+  ModeButtonState = 0;
+  UpButtonState = 0;
+  DownButtonState = 0;
 #endif
-
-  p = playmusic(p);
-
   if ((millis() - prevTime4FireWorks) > 5)
   {
     rotateFireWorks(); //change color (by 1 step)
     prevTime4FireWorks = millis();
   }
 
-  if ((menuPosition == TimeIndex) || (modeChangedByUser == false) ) modesChanger();
-  doIndication();
+  if ((menuPosition == TimeIndex) || (modeChangedByUser == false)) modesChanger();
+
+  if (ledStatus == HIGH) {
+    doIndication();
+  }
 
   setButton.Update();
   upButton.Update();
@@ -497,13 +398,13 @@ void loop() {
     tone1.play(1000, 100);
     enteringEditModeTime = millis();
     /*if (value[DateFormatIndex] == US_DateFormat)
-    {
+      {
       //if (menuPosition == )
-    } else */
+      } else */
     menuPosition = menuPosition + 1;
-    #if defined (__AVR_ATmega328P__)
-      if (menuPosition == TimeZoneIndex) menuPosition++;// skip TimeZone for Arduino Uno
-    #endif
+#if defined (__AVR_ATmega328P__)
+    if (menuPosition == TimeZoneIndex) menuPosition++;// skip TimeZone for Arduino Uno
+#endif
     if (menuPosition == LastParent + 1) menuPosition = TimeIndex;
     Serial.print(F("menuPosition="));
     Serial.println(menuPosition);
@@ -521,7 +422,7 @@ void loop() {
       editMode = false;
       menuPosition = parent[menuPosition - 1] - 1;
       if (menuPosition == TimeIndex) setTime(value[TimeHoursIndex], value[TimeMintuesIndex], value[TimeSecondsIndex], day(), month(), year());
-      if (menuPosition == DateIndex) 
+      if (menuPosition == DateIndex)
       {
         Serial.print("Day:");
         Serial.println(value[DateDayIndex]);
@@ -562,14 +463,14 @@ void loop() {
       enteringEditModeTime = millis();
       if (menuPosition == TimeIndex) stringToDisplay = PreZero(hour()) + PreZero(minute()) + PreZero(second()); //temporary enabled 24 hour format while settings
     }
-    if (menuPosition == DateIndex) 
+    if (menuPosition == DateIndex)
     {
       Serial.println("DateEdit");
       value[DateDayIndex] =  day();
       value[DateMonthIndex] = month();
       value[DateYearIndex] = year() % 1000;
-      if (value[DateFormatIndex] == EU_DateFormat) stringToDisplay=PreZero(value[DateDayIndex])+PreZero(value[DateMonthIndex])+PreZero(value[DateYearIndex]);
-        else stringToDisplay=PreZero(value[DateMonthIndex])+PreZero(value[DateDayIndex])+PreZero(value[DateYearIndex]);
+      if (value[DateFormatIndex] == EU_DateFormat) stringToDisplay = PreZero(value[DateDayIndex]) + PreZero(value[DateMonthIndex]) + PreZero(value[DateYearIndex]);
+      else stringToDisplay = PreZero(value[DateMonthIndex]) + PreZero(value[DateDayIndex]) + PreZero(value[DateYearIndex]);
       Serial.print("str=");
       Serial.println(stringToDisplay);
     }
@@ -579,14 +480,14 @@ void loop() {
     }
     editMode = !editMode;
     blinkMask = blinkPattern[menuPosition];
-    if ((menuPosition != DegreesFormatIndex) && 
+    if ((menuPosition != DegreesFormatIndex) &&
         (menuPosition != HoursOffsetIndex) &&
         (menuPosition != DateFormatIndex))
       value[menuPosition] = extractDigits(blinkMask);
     Serial.print(F("menuPosition="));
     Serial.println(menuPosition);
     Serial.print(F("value="));
-    Serial.println(value[menuPosition]);  
+    Serial.println(value[menuPosition]);
   }
 
   if (upButton.clicks != 0) functionUpButton = upButton.clicks;
@@ -727,40 +628,40 @@ void loop() {
       if (getTemperature(value[DegreesFormatIndex]) < 0) dotPattern |= B10000000;
       else dotPattern &= B01111111;
       break;
-     case TimeZoneIndex:
-     case HoursOffsetIndex:
+    case TimeZoneIndex:
+    case HoursOffsetIndex:
       stringToDisplay = String(PreZero(value[HoursOffsetIndex])) + "0000";
       blankMask = B00001111;
-      if (value[HoursOffsetIndex]>=0) dotPattern = B00000000; //turn off all dots  
-        else dotPattern = B10000000; //turn on upper dots  
+      if (value[HoursOffsetIndex] >= 0) dotPattern = B00000000; //turn off all dots
+      else dotPattern = B10000000; //turn on upper dots
       break;
-     case DateFormatIndex:
-      if (value[DateFormatIndex] == EU_DateFormat) 
+    case DateFormatIndex:
+      if (value[DateFormatIndex] == EU_DateFormat)
       {
-        stringToDisplay="311299";
-        blinkPattern[DateDayIndex]=B00000011;
-        blinkPattern[DateMonthIndex]=B00001100;
+        stringToDisplay = "311299";
+        blinkPattern[DateDayIndex] = B00000011;
+        blinkPattern[DateMonthIndex] = B00001100;
       }
-        else 
-        {
-          stringToDisplay="123199";
-          blinkPattern[DateDayIndex]=B00001100;
-          blinkPattern[DateMonthIndex]=B00000011;
-        }
-     break; 
-     case DateDayIndex:
-     case DateMonthIndex:
-     case DateYearIndex:
-      if (value[DateFormatIndex] == EU_DateFormat) stringToDisplay=PreZero(value[DateDayIndex])+PreZero(value[DateMonthIndex])+PreZero(value[DateYearIndex]);
-        else stringToDisplay=PreZero(value[DateMonthIndex])+PreZero(value[DateDayIndex])+PreZero(value[DateYearIndex]);
-     break;
+      else
+      {
+        stringToDisplay = "123199";
+        blinkPattern[DateDayIndex] = B00001100;
+        blinkPattern[DateMonthIndex] = B00000011;
+      }
+      break;
+    case DateDayIndex:
+    case DateMonthIndex:
+    case DateYearIndex:
+      if (value[DateFormatIndex] == EU_DateFormat) stringToDisplay = PreZero(value[DateDayIndex]) + PreZero(value[DateMonthIndex]) + PreZero(value[DateYearIndex]);
+      else stringToDisplay = PreZero(value[DateMonthIndex]) + PreZero(value[DateDayIndex]) + PreZero(value[DateYearIndex]);
+      break;
   }
-//  IRresults.value=0;
+  //  IRresults.value=0;
 }
 
 String PreZero(int digit)
 {
-  digit=abs(digit);
+  digit = abs(digit);
   if (digit < 10) return String("0") + String(digit);
   else return String(digit);
 }
@@ -781,15 +682,7 @@ void rotateFireWorks()
   analogWrite(RedLedPin, RedLight );
   analogWrite(GreenLedPin, GreenLight);
   analogWrite(BlueLedPin, BlueLight);
-  // ********
-  //Serial.print(F("RED="));
-  //Serial.println(RedLight);
-  //Serial.print(F("GREEN="));
-  //Serial.println(GreenLight);
-  //Serial.print(F("Blue="));
-  //Serial.println(BlueLight);
-  // ********
-  
+
   cycle = cycle + 1;
   if (cycle == 255)
   {
@@ -819,64 +712,63 @@ String getTimeNow()
 void doTest()
 {
   Serial.print(F("Firmware version: "));
-  Serial.println(FirmwareVersion.substring(1,2)+"."+FirmwareVersion.substring(2,5));
+  Serial.println(FirmwareVersion.substring(1, 2) + "." + FirmwareVersion.substring(2, 5));
   Serial.println(HardwareVersion);
   Serial.println(F("Start Test"));
-  
-  p=song;
-  parseSong(p);
-  //p=0; //need to be deleted
-   
-  analogWrite(RedLedPin,255);
-  delay(1000);
-  analogWrite(RedLedPin,0);
-  analogWrite(GreenLedPin,255);
-  delay(1000);
-  analogWrite(GreenLedPin,0);
-  analogWrite(BlueLedPin,255);
-  delay(1000); 
-  analogWrite(BlueLedPin,0);
 
-  #ifdef tubes8
-  String testStringArray[11]={"00000000","11111111","22222222","33333333","44444444","55555555","66666666","77777777","88888888","99999999",""};
-  testStringArray[10]=FirmwareVersion+"00";
-  #endif
-  #ifdef tubes6
-  String testStringArray[11]={"000000","111111","222222","333333","444444","555555","666666","777777","888888","999999",""};
-  testStringArray[10]=FirmwareVersion;
-  #endif
-  
-  int dlay=500;
-  bool test=1;
-  byte strIndex=-1;
-  unsigned long startOfTest=millis()+1000; //disable delaying in first iteration
-  bool digitsLock=false;
+  analogWrite(RedLedPin, 255);
+  delay(1000);
+  analogWrite(RedLedPin, 0);
+  analogWrite(GreenLedPin, 255);
+  delay(1000);
+  analogWrite(GreenLedPin, 0);
+  analogWrite(BlueLedPin, 255);
+  delay(1000);
+  analogWrite(BlueLedPin, 0);
+
+#ifdef tubes8
+  String testStringArray[11] = {"00000000", "11111111", "22222222", "33333333", "44444444", "55555555", "66666666", "77777777", "88888888", "99999999", ""};
+  testStringArray[10] = FirmwareVersion + "00";
+#endif
+#ifdef tubes6
+  String testStringArray[11] = {"000000", "111111", "222222", "333333", "444444", "555555", "666666", "777777", "888888", "999999", ""};
+  testStringArray[10] = FirmwareVersion;
+#endif
+
+  int dlay = 500;
+  bool test = 1;
+  byte strIndex = -1;
+  unsigned long startOfTest = millis() + 1000; //disable delaying in first iteration
+  bool digitsLock = false;
   while (test)
   {
-    if (digitalRead(pinDown)==0) digitsLock=true;
-    if (digitalRead(pinUp)==0) digitsLock=false;
+    if (digitalRead(pinDown) == 0) digitsLock = true;
+    if (digitalRead(pinUp) == 0) digitsLock = false;
 
-   if ((millis()-startOfTest)>dlay) 
-   {
-     startOfTest=millis();
-     if (!digitsLock) strIndex=strIndex+1;
-     if (strIndex==10) dlay=2000;
-     if (strIndex>10) { test=false; strIndex=10;}
-     
-     stringToDisplay=testStringArray[strIndex];
-     Serial.println(stringToDisplay);
-     doIndication();
-   }
-   delayMicroseconds(2000);
-  }; 
-  
-  if ( !ds.search(addr)) 
+    if ((millis() - startOfTest) > dlay)
+    {
+      startOfTest = millis();
+      if (!digitsLock) strIndex = strIndex + 1;
+      if (strIndex == 10) dlay = 2000;
+      if (strIndex > 10) {
+        test = false;
+        strIndex = 10;
+      }
+
+      stringToDisplay = testStringArray[strIndex];
+      Serial.println(stringToDisplay);
+      doIndication();
+    }
+    delayMicroseconds(2000);
+  };
+
+  if ( !ds.search(addr))
   {
     Serial.println(F("Temp. sensor not found."));
-  } else TempPresent=true;
-  
+  } else TempPresent = true;
+
   Serial.println(F("Stop Test"));
- // while(1);
+  // while(1);
 }
 
 void doDotBlink()
@@ -983,165 +875,6 @@ bool isValidDate()
 
 }
 
-byte default_dur = 4;
-byte default_oct = 6;
-int bpm = 63;
-int num;
-long wholenote;
-long duration;
-byte note;
-byte scale;
-char* parseSong(char *p)
-{
-  // Absolutely no error checking in here
-  // format: d=N,o=N,b=NNN:
-  // find the start (skip name, etc)
-
-  while (*p != ':') p++;   // ignore name
-  p++;                     // skip ':'
-
-  // get default duration
-  if (*p == 'd')
-  {
-    p++; p++;              // skip "d="
-    num = 0;
-    while (isdigit(*p))
-    {
-      num = (num * 10) + (*p++ - '0');
-    }
-    if (num > 0) default_dur = num;
-    p++;                   // skip comma
-  }
-
-  // get default octave
-  if (*p == 'o')
-  {
-    p++; p++;              // skip "o="
-    num = *p++ - '0';
-    if (num >= 3 && num <= 7) default_oct = num;
-    p++;                   // skip comma
-  }
-
-  // get BPM
-  if (*p == 'b')
-  {
-    p++; p++;              // skip "b="
-    num = 0;
-    while (isdigit(*p))
-    {
-      num = (num * 10) + (*p++ - '0');
-    }
-    bpm = num;
-    p++;                   // skip colon
-  }
-
-  // BPM usually expresses the number of quarter notes per minute
-  wholenote = (60 * 1000L / bpm) * 4;  // this is the time for whole note (in milliseconds)
-  return p;
-}
-
-// now begin note loop
-static unsigned long lastTimeNotePlaying = 0;
-char* playmusic(char *p)
-{
-  if (*p == 0)
-  {
-    return p;
-  }
-  if (millis() - lastTimeNotePlaying > duration)
-    lastTimeNotePlaying = millis();
-  else return p;
-  // first, get note duration, if available
-  num = 0;
-  while (isdigit(*p))
-  {
-    num = (num * 10) + (*p++ - '0');
-  }
-
-  if (num) duration = wholenote / num;
-  else duration = wholenote / default_dur;  // we will need to check if we are a dotted note after
-
-  // now get the note
-  note = 0;
-
-  switch (*p)
-  {
-    case 'c':
-      note = 1;
-      break;
-    case 'd':
-      note = 3;
-      break;
-    case 'e':
-      note = 5;
-      break;
-    case 'f':
-      note = 6;
-      break;
-    case 'g':
-      note = 8;
-      break;
-    case 'a':
-      note = 10;
-      break;
-    case 'b':
-      note = 12;
-      break;
-    case 'p':
-    default:
-      note = 0;
-  }
-  p++;
-
-  // now, get optional '#' sharp
-  if (*p == '#')
-  {
-    note++;
-    p++;
-  }
-
-  // now, get optional '.' dotted note
-  if (*p == '.')
-  {
-    duration += duration / 2;
-    p++;
-  }
-
-  // now, get scale
-  if (isdigit(*p))
-  {
-    scale = *p - '0';
-    p++;
-  }
-  else
-  {
-    scale = default_oct;
-  }
-
-  scale += OCTAVE_OFFSET;
-
-  if (*p == ',')
-    p++;       // skip comma for next note (or we may be at the end)
-
-  // now play the note
-
-  if (note)
-  {
-    tone1.play(notes[(scale - 4) * 12 + note], duration);
-    if (millis() - lastTimeNotePlaying > duration)
-      lastTimeNotePlaying = millis();
-    else return p;
-    tone1.stop();
-  }
-  else
-  {
-    return p;
-  }
-  Serial.println(F("Incorrect Song Format!"));
-  return 0; //error
-}
-
-
 void incrementValue()
 {
   enteringEditModeTime = millis();
@@ -1155,7 +888,7 @@ void incrementValue()
       if (value[menuPosition] == 1) /*digitalWrite(pinUpperDots, HIGH);*/dotPattern = B10000000; //turn on upper dots
       /*else digitalWrite(pinUpperDots, LOW); */ dotPattern = B00000000; //turn off all dots
     }
-    if (menuPosition!=DateFormatIndex) injectDigits(blinkMask, value[menuPosition]);
+    if (menuPosition != DateFormatIndex) injectDigits(blinkMask, value[menuPosition]);
     Serial.print("value=");
     Serial.println(value[menuPosition]);
   }
@@ -1173,7 +906,7 @@ void dicrementValue()
       if (value[menuPosition] == 1) /*digitalWrite(pinUpperDots, HIGH);*/ dotPattern = B10000000; //turn on upper dots
       else /*digitalWrite(pinUpperDots, LOW);*/ dotPattern = B00000000; //turn off all dots
     }
-    if (menuPosition!=DateFormatIndex) injectDigits(blinkMask, value[menuPosition]);
+    if (menuPosition != DateFormatIndex) injectDigits(blinkMask, value[menuPosition]);
     Serial.print("value=");
     Serial.println(value[menuPosition]);
   }
@@ -1191,7 +924,6 @@ void checkAlarmTime()
     lastTimeAlarmTriggired = millis();
     Alarm1SecondBlock = true;
     Serial.println(F("Wake up, Neo!"));
-    p = song;
   }
 }
 
@@ -1201,7 +933,7 @@ void setLEDsFromEEPROM()
   analogWrite(RedLedPin, EEPROM.read(LEDsRedValueEEPROMAddress));
   analogWrite(GreenLedPin, EEPROM.read(LEDsGreenValueEEPROMAddress));
   analogWrite(BlueLedPin, EEPROM.read(LEDsBlueValueEEPROMAddress));
-    // ********
+  // ********
   Serial.println(F("Readed from EEPROM"));
   Serial.print(F("RED="));
   Serial.println(EEPROM.read(LEDsRedValueEEPROMAddress));
@@ -1303,14 +1035,14 @@ String antiPoisoning2(String fromStr, String toStr)
 
 String updateDateString()
 {
-  static unsigned long lastTimeDateUpdate = millis()+1001;
+  static unsigned long lastTimeDateUpdate = millis() + 1001;
   static String DateString = PreZero(day()) + PreZero(month()) + PreZero(year() % 1000);
-  static byte prevoiusDateFormatWas=value[DateFormatIndex];
+  static byte prevoiusDateFormatWas = value[DateFormatIndex];
   if (((millis() - lastTimeDateUpdate) > 1000) || (prevoiusDateFormatWas != value[DateFormatIndex]))
   {
     lastTimeDateUpdate = millis();
-    if (value[DateFormatIndex]==EU_DateFormat) DateString = PreZero(day()) + PreZero(month()) + PreZero(year() % 1000);
-      else DateString = PreZero(month()) + PreZero(day()) + PreZero(year() % 1000);
+    if (value[DateFormatIndex] == EU_DateFormat) DateString = PreZero(day()) + PreZero(month()) + PreZero(year() % 1000);
+    else DateString = PreZero(month()) + PreZero(day()) + PreZero(year() % 1000);
   }
   return DateString;
 }
@@ -1336,166 +1068,10 @@ float getTemperature (boolean bTempFormat)
   return fDegrees;
 }
 
-#if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
-
-void SyncWithGPS()
-{
-  static unsigned long Last_Time_GPS_Sync=0;
-  static bool GPS_Sync_Flag=0;
-  //byte HoursOffset=2;
-  if (GPS_Sync_Flag == 0) 
-  {
-    if ((millis()-GPS_Date_Time.GPS_Data_Parsed_time)>3000) {Serial.println("Parsed data to old"); return;}
-    Serial.println("Updating time...");
-    Serial.println(GPS_Date_Time.GPS_hours);
-    Serial.println(GPS_Date_Time.GPS_minutes);
-    Serial.println(GPS_Date_Time.GPS_seconds);
-    
-    setTime(GPS_Date_Time.GPS_hours, GPS_Date_Time.GPS_minutes, GPS_Date_Time.GPS_seconds, GPS_Date_Time.GPS_day, GPS_Date_Time.GPS_mounth, GPS_Date_Time.GPS_year % 1000);
-    adjustTime(value[HoursOffsetIndex] * 3600);
-    setRTCDateTime(hour(), minute(), second(), day(), month(), year() % 1000, 1);
-    GPS_Sync_Flag = 1;
-    Last_Time_GPS_Sync=millis();
-  }
-    else
-    {
-      if (((millis())-Last_Time_GPS_Sync) > 1800000) GPS_Sync_Flag=0;
-        else GPS_Sync_Flag=1;
-    }
-}
-
-void GetDataFromSerial1()
-{
-  if (Serial1.available()) {     // If anything comes in Serial1 (pins 0 & 1)
-    byte GPS_incoming_byte;
-    GPS_incoming_byte=Serial1.read();
-    //Serial.write(GPS_incoming_byte);
-    GPS_Package[GPS_position]=GPS_incoming_byte;
-    GPS_position++;
-    if (GPS_position == GPS_BUFFER_LENGTH-1)
-    {
-      GPS_position=0;
-     // Serial.println("more then BUFFER_LENGTH!!!!");
-    }
-    if (GPS_incoming_byte == 0x0A) 
-    {
-      GPS_Package[GPS_position]=0;
-      GPS_position=0;
-      if (ControlCheckSum()) {/*Serial.println("Call parse");*/ GPS_Parse_DateTime();}
-        
-    }
-  }
-}
-
-bool GPS_Parse_DateTime()
-{
-  bool GPSsignal=false;
-  if (!((GPS_Package[0]   == '$')
-       &&(GPS_Package[3] == 'R')
-       &&(GPS_Package[4] == 'M')
-       &&(GPS_Package[5] == 'C'))) {return false;}
-       else 
-       {
-       // Serial.println("RMC!!!");
-       }
-  //Serial.print("hh: ");
-  int hh=(GPS_Package[7]-48)*10+GPS_Package[8]-48;
-  //Serial.println(hh);
-  int mm=(GPS_Package[9]-48)*10+GPS_Package[10]-48;
-  //Serial.print("mm: ");
-  //Serial.println(mm);
-  int ss=(GPS_Package[11]-48)*10+GPS_Package[12]-48;
-  //Serial.print("ss: ");
-  //Serial.println(ss);
-
-  byte GPSDatePos=0;
-  int CommasCounter=0;
-  for (int i = 12; i < GPS_BUFFER_LENGTH ; i++)  
-  {
-    if (GPS_Package[i] == ',')
-    {
-      CommasCounter++; 
-      if (CommasCounter==8) 
-        {
-          GPSDatePos=i+1;
-          break;
-        }
-    }
-  }
-  //Serial.print("dd: ");
-  int dd=(GPS_Package[GPSDatePos]-48)*10+GPS_Package[GPSDatePos+1]-48;
-  //Serial.println(dd);
-  int MM=(GPS_Package[GPSDatePos+2]-48)*10+GPS_Package[GPSDatePos+3]-48;
-  //Serial.print("MM: ");
-  //Serial.println(MM);
-  int yyyy=2000+(GPS_Package[GPSDatePos+4]-48)*10+GPS_Package[GPSDatePos+5]-48;
-  //Serial.print("yyyy: ");
-  //Serial.println(yyyy);
-  //if ((hh<0) || (mm<0) || (ss<0) || (dd<0) || (MM<0) || (yyyy<0)) return false;
-  if ( !inRange( yyyy, 2018, 2038 ) ||
-    !inRange( MM, 1, 12 ) ||
-    !inRange( dd, 1, 31 ) ||
-    !inRange( hh, 0, 23 ) ||
-    !inRange( mm, 0, 59 ) ||
-    !inRange( ss, 0, 59 ) ) return false;
-    else 
-    {
-      GPS_Date_Time.GPS_hours=hh;
-      GPS_Date_Time.GPS_minutes=mm;
-      GPS_Date_Time.GPS_seconds=ss;
-      GPS_Date_Time.GPS_day=dd;
-      GPS_Date_Time.GPS_mounth=MM;
-      GPS_Date_Time.GPS_year=yyyy;
-      GPS_Date_Time.GPS_Data_Parsed_time=millis();
-      //Serial.println("Precision TIME HAS BEEN ACCURED!!!!!!!!!");
-      //GPS_Package[0]=0x0A;
-      return 1;
-    }
-}
-
-uint8_t ControlCheckSum()
-{
-  uint8_t  CheckSum = 0, MessageCheckSum = 0;   // check sum
-  uint16_t i = 1;                // 1 sybol left from '$'
-
-  while (GPS_Package[i]!='*')
-  {
-    CheckSum^=GPS_Package[i];
-    if (++i == GPS_BUFFER_LENGTH) {Serial.println("End of the line"); return 0;} // end of line not found
-  }
-
-  if (GPS_Package[++i]>0x40) MessageCheckSum=(GPS_Package[i]-0x37)<<4;  // ASCII codes to DEC convertation 
-  else                  MessageCheckSum=(GPS_Package[i]-0x30)<<4;  
-  if (GPS_Package[++i]>0x40) MessageCheckSum+=(GPS_Package[i]-0x37);
-  else                  MessageCheckSum+=(GPS_Package[i]-0x30);
-  
-  if (MessageCheckSum != CheckSum) {Serial.println("wrong checksum"); return 0;} // wrong checksum
-  //Serial.println("Checksum is ok");
-  return 1; // all ok!
-}
-
-#endif
-
-/*String updateTemperatureString(float fDegrees)
-{
-  int iDegrees = round(fDegrees);
-  String strTemp;
-
-  strTemp = "0" + String(abs(iDegrees)) + "0";
-  if (abs(iDegrees) < 1000) strTemp = "00" + String(abs(iDegrees)) + "0";
-  if (abs(iDegrees) < 100) strTemp = "000" + String(abs(iDegrees)) + "0";
-  if (abs(iDegrees) < 10) strTemp = "0000" + String(abs(iDegrees)) + "0";
-
-  return strTemp;
-}*/
-
 String updateTemperatureString(float fDegrees)
 {
-  static  unsigned long lastTimeTemperatureString=millis()+1100;
-  static String strTemp ="000000";
-  /*int delayTempUpdate;
-  if (displayNow) delayTempUpdate=0;
-    else delayTempUpdate = 1000;*/
+  static  unsigned long lastTimeTemperatureString = millis() + 1100;
+  static String strTemp = "000000";
   if ((millis() - lastTimeTemperatureString) > 1000)
   {
     //Serial.println("F(Updating temp. str.)");
@@ -1507,17 +1083,17 @@ String updateTemperatureString(float fDegrees)
       if (abs(iDegrees) < 1000) strTemp = "00" + String(abs(iDegrees)) + "0";
       if (abs(iDegrees) < 100) strTemp = "000" + String(abs(iDegrees)) + "0";
       if (abs(iDegrees) < 10) strTemp = "0000" + String(abs(iDegrees)) + "0";
-    }else
+    } else
     {
       strTemp = "0" + String(abs(iDegrees)) + "0";
-      if (abs(iDegrees) < 1000) strTemp = "00" + String(abs(iDegrees)/10) + "00";
-      if (abs(iDegrees) < 100) strTemp = "000" + String(abs(iDegrees)/10) + "00";
-      if (abs(iDegrees) < 10) strTemp = "0000" + String(abs(iDegrees)/10) + "00";
+      if (abs(iDegrees) < 1000) strTemp = "00" + String(abs(iDegrees) / 10) + "00";
+      if (abs(iDegrees) < 100) strTemp = "000" + String(abs(iDegrees) / 10) + "00";
+      if (abs(iDegrees) < 10) strTemp = "0000" + String(abs(iDegrees) / 10) + "00";
     }
 
-    #ifdef tubes8
-      strTemp= ""+strTemp+"00";
-    #endif
+#ifdef tubes8
+    strTemp = "" + strTemp + "00";
+#endif
     return strTemp;
   }
   return strTemp;
@@ -1526,11 +1102,88 @@ String updateTemperatureString(float fDegrees)
 
 boolean inRange( int no, int low, int high )
 {
-if ( no < low || no > high ) 
-{
-  Serial.println(F("Not in range"));
-  Serial.println(String(no) + ":" + String (low) + "-" + String(high));
-  return false;
+  if ( no < low || no > high )
+  {
+    Serial.println(F("Not in range"));
+    Serial.println(String(no) + ":" + String (low) + "-" + String(high));
+    return false;
+  }
+  return true;
 }
-return true;
+
+void sendHttpResponse(WiFiEspClient client)
+{
+  // HTTP headers always start with a response code (e.g. HTTP/1.1 200 OK)
+  // and a content-type so the client knows what's coming, then a blank line:
+  client.println("HTTP/1.1 200 OK");
+  client.println("Content-type:text/html");
+  client.println();
+  client.print(ledStatus);
+  // The HTTP response ends with another blank line:
+  client.println();
+}
+
+void printWifiStatus()
+{
+  // print the SSID of the network you're attached to
+  Serial.print("SSID: ");
+  Serial.println(WiFi.SSID());
+
+  // print your WiFi shield's IP address
+  IPAddress ip = WiFi.localIP();
+  Serial.print("IP Address: ");
+  Serial.println(ip);
+
+  // print where to go in the browser
+  Serial.println();
+  Serial.print("To see this page in action, open a browser to http://");
+  Serial.println(ip);
+  Serial.println();
+}
+
+void getNTPTime()
+{
+  sendNTPpacket(timeServer);
+
+  unsigned long startMs = millis();
+  while (!Udp.available() && (millis() - startMs) < UDP_TIMEOUT) {}
+
+  Serial.println(Udp.parsePacket());
+  if (Udp.parsePacket()) {
+    Serial.println("packet received");
+    Udp.read(packetBuffer, NTP_PACKET_SIZE);
+
+    unsigned long highWord = word(packetBuffer[40], packetBuffer[41]);
+    unsigned long lowWord = word(packetBuffer[42], packetBuffer[43]);
+    unsigned long secsSince1900 = highWord << 16 | lowWord;
+    const unsigned long seventyYears = 2208988800UL;
+    unsigned long epoch = secsSince1900 - seventyYears + (8 * 60 * 60);
+    setRTCDateTime(hour(), minute(), second(), day(), month(), year() % 1000, 1);
+  }
+}
+
+void sendNTPpacket(char *ntpSrv)
+{
+  // set all bytes in the buffer to 0
+  memset(packetBuffer, 0, NTP_PACKET_SIZE);
+  // Initialize values needed to form NTP request
+  // (see URL above for details on the packets)
+
+  packetBuffer[0] = 0b11100011;   // LI, Version, Mode
+  packetBuffer[1] = 0;     // Stratum, or type of clock
+  packetBuffer[2] = 6;     // Polling Interval
+  packetBuffer[3] = 0xEC;  // Peer Clock Precision
+  // 8 bytes of zero for Root Delay & Root Dispersion
+  packetBuffer[12]  = 49;
+  packetBuffer[13]  = 0x4E;
+  packetBuffer[14]  = 49;
+  packetBuffer[15]  = 52;
+
+  // all NTP fields have been given values, now
+  // you can send a packet requesting a timestamp:
+  Udp.beginPacket(ntpSrv, 123); //NTP requests are to port 123
+
+  Udp.write(packetBuffer, NTP_PACKET_SIZE);
+
+  Udp.endPacket();
 }
