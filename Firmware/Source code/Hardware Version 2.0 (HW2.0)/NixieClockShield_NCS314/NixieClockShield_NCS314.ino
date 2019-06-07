@@ -1092,7 +1092,7 @@ void getNTPTime() {
 
         setTime(hour(), minute(), second(), day(), month(), year());
 
-        if (millis() % 2.16e+7 == 0) { // set RTC every 6 hours
+        if (millis() % (3600000 * 6) == 0) { // set RTC every 6 hours
             setRTCDateTime(hour(), minute(), second(), day(), month(), year() % 1000, 1);
         }
     }
