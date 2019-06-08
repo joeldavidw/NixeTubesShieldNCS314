@@ -16,7 +16,7 @@ const String FirmwareVersion = "018400";
 #include "WiFiEsp.h"
 
 char ssid[] = "SSID";
-char pass[] = "Password";
+char pass[] = "PASSWORD";
 int status = WL_IDLE_STATUS;
 int ledStatus = HIGH;
 WiFiEspServer server(80);
@@ -117,12 +117,14 @@ int RTC_hours, RTC_minutes, RTC_seconds, RTC_day, RTC_month, RTC_year, RTC_day_o
 //                     names:  Time,   Date,   Alarm,   12/24, Temperature,TimeZone,hours,   mintues, seconds, DateFormat, day,    month,   year,      hour,   minute,   second alarm01  hour_format Deg.FormIndex HoursOffset
 //                               1        1        1       1        1        1        1        1        1        1          1        1          1          1        1        1        1            1         1        1
 int parent[SettingsCount] = {NoParent, NoParent, NoParent, NoParent, NoParent, NoParent, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3,
-                             3, 4, 5, 6};
+                             3, 4, 5, 6
+};
 int firstChild[SettingsCount] = {6, 9, 13, 17, 18, 19, 0, 0, 0, NoChild, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 int lastChild[SettingsCount] = {8, 12, 16, 17, 18, 19, 0, 0, 0, NoChild, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 int value[SettingsCount] = {0, 0, 0, 0, 0, 0, 0, 0, 0, EU_DateFormat, 0, 0, 0, 0, 0, 0, 0, 24, 0, 2};
 int maxValue[SettingsCount] = {0, 0, 0, 0, 0, 0, 23, 59, 59, US_DateFormat, 31, 12, 99, 23, 59, 59, 1, 24, FAHRENHEIT,
-                               14};
+                               14
+};
 int minValue[SettingsCount] = {0, 0, 0, 12, 0, 0, 00, 00, 00, EU_DateFormat, 1, 1, 00, 00, 00, 00, 0, 12, CELSIUS, -12};
 int blinkPattern[SettingsCount] = {
         B00000000, //0
@@ -211,23 +213,22 @@ void setup() {
 #if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
     Serial1.begin(9600);
 
-#if (NTPSyncEnabled)
-    Serial3.begin(115200);
-    WiFi.init(&Serial3);    // initialize ESP module
-    while (status != WL_CONNECTED) {
-      Serial.print("Attempting to connect to WPA SSID: ");
-      Serial.println(ssid);
-      // Connect to WPA/WPA2 network
-      status = WiFi.begin(ssid, pass);
+    if (NTPSyncEnabled) {
+      Serial3.begin(115200);
+      WiFi.init(&Serial3);    // initialize ESP module
+      while (status != WL_CONNECTED) {
+        Serial.print("Attempting to connect to WPA SSID: ");
+        Serial.println(ssid);
+        // Connect to WPA/WPA2 network
+        status = WiFi.begin(ssid, pass);
+      }
+
+      Serial.println("You're connected to the network");
+      printWifiStatus();
+
+      server.begin();
+      Udp.begin(localPort);
     }
-
-    Serial.println("You're connected to the network");
-    printWifiStatus();
-
-    // start the web server on port 80
-    server.begin();
-    Udp.begin(localPort);
-#endif
 #endif
 
     if (EEPROM.read(HourFormatEEPROMAddress) != 12) value[hModeValueIndex] = 24; else value[hModeValueIndex] = 12;
@@ -292,11 +293,14 @@ void setup() {
     downButton.longClickTime = 2000; // time until "held-down clicks" register
 
     //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    doTest();
+    setNTPTime();
+    setRTCDateTime(hour(), minute(), second(), day(), month(), year() % 1000, 1);
     //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
     if (LEDsLock == 1) {
         setLEDsFromEEPROM();
     }
+
     getRTCTime();
     byte prevSeconds = RTC_seconds;
     unsigned long RTC_ReadingStartTime = millis();
@@ -359,7 +363,7 @@ void loop() {
 
     if (((millis() % 60000) == 0) && (NTPSyncEnabled)) //synchronize with NTP every 1 min
     {
-        getNTPTime();
+        setNTPTime();
         Serial.println(F("Sync from NTP"));
     }
 
@@ -702,7 +706,8 @@ void doTest() {
 #endif
 #ifdef tubes6
     String testStringArray[11] = {"000000", "111111", "222222", "333333", "444444", "555555", "666666", "777777",
-                                  "888888", "999999", ""};
+                                  "888888", "999999", ""
+    };
     testStringArray[10] = FirmwareVersion;
 #endif
 
@@ -1074,7 +1079,7 @@ void printWifiStatus() {
     Serial.println();
 }
 
-void getNTPTime() {
+time_t getNTPTime() {
     sendNTPpacket(timeServer);
 
     unsigned long startMs = millis();
@@ -1089,12 +1094,15 @@ void getNTPTime() {
         unsigned long secsSince1900 = highWord << 16 | lowWord;
         const unsigned long seventyYears = 2208988800UL;
         unsigned long epoch = secsSince1900 - seventyYears + (8 * 60 * 60);
+        return epoch;
+    }
+}
 
-        setTime(hour(), minute(), second(), day(), month(), year());
+void setNTPTime() {
+    setTime(getNTPTime());
 
-        if (millis() % (3600000 * 6) == 0) { // set RTC every 6 hours
-            setRTCDateTime(hour(), minute(), second(), day(), month(), year() % 1000, 1);
-        }
+    if (millis() % (3600000 * 6) == 0) { // set RTC every 6 hours
+        setRTCDateTime(hour(), minute(), second(), day(), month(), year() % 1000, 1);
     }
 }
 
